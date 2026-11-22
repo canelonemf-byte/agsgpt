@@ -26,9 +26,12 @@ make test                        # 12 tests
 make up && make ps && make health
 ```
 
+Variables opcionales en `.env`: `AGSGPT_PORT` (puerto publicado de la app; `make health` y `make metrics` lo usan, por defecto 8000), `AGSGPT_HEALTH_URL`, `AGSGPT_ALERT_EMAIL` y `AGSGPT_SMTP_PASS_FILE` (por defecto `monitoring/secrets/smtp_password` del repo). `make up` lee el `.env` de la raíz con `--env-file`.
+
 `.env` y `monitoring/secrets/` están excluidos de git. Detalle de cambios y pendientes: `REVISION_OPCION_D.md`.
 
 ## Estado verificado (2026-11-22)
 
 - 12 tests pasan con las dependencias reales (`pytest`, `prometheus-client`, `fastapi`).
-- Pendiente: no se ha ejecutado `docker compose` ni llamadas reales a OpenAI o Anthropic; imágenes de monitorización en `latest` sin fijar.
+- `make up` probado con Docker 26.1.5 y Compose 2.26.1: los 4 servicios arrancan, la app queda `healthy` y Prometheus ve los targets.
+- Pendiente: llamadas reales a OpenAI o Anthropic; imágenes de monitorización en `latest` sin fijar.

@@ -18,6 +18,14 @@ Este árbol sustituye al `setup.sh` pegado. No hace falta ejecutar el script: co
 - **Grafana sin contraseña por defecto.** `GRAFANA_PASSWORD` es obligatoria en `.env`.
 - **`scripts/set-smtp-password.sh`.** Pide la app password sin eco y la guarda con permisos 600.
 
+## Correcciones tras probar con Docker (2026-11-22)
+
+- **`pytest.ini` nuevo** (`pythonpath = .`, `testpaths = tests`): `make test` encuentra `app` sin `PYTHONPATH`.
+- **Compose lee el `.env` de la raíz.** El Makefile y la unidad systemd usan `--env-file .env`; antes Compose lo buscaba en `docker/` y fallaba con `GRAFANA_PASSWORD`.
+- **`start.sh` vacía el directorio de métricas** en vez de borrarlo. Era un tmpfs montado y `rm -rf` daba `Device or resource busy`, con la app reiniciándose en bucle.
+- **`health-check.sh` configurable:** `AGSGPT_HEALTH_URL` (por defecto `http://127.0.0.1:${AGSGPT_PORT:-8000}/health`), `AGSGPT_ALERT_EMAIL` y `AGSGPT_SMTP_PASS_FILE` (por defecto relativo al repo). Solo envía email si el fichero de contraseña no está vacío.
+- **Puerto de la app configurable** con `AGSGPT_PORT` en compose, `make health` y `make metrics`.
+
 ## Cómo aplicarlo en tu equipo
 
 1. Copia cada archivo en `/workspace/agsgpt` con un `.bak` previo si ya existe.

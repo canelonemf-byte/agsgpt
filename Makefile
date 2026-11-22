@@ -1,4 +1,6 @@
-COMPOSE = docker compose -f docker/docker-compose.yml
+COMPOSE = docker compose --env-file .env -f docker/docker-compose.yml
+# Puerto publicado de la app: variable de entorno, luego .env, luego 8000
+AGSGPT_PORT ?= $(or $(shell sed -n 's/^AGSGPT_PORT=//p' .env 2>/dev/null | tail -n 1),8000)
 
 .PHONY: dev test up down logs ps health metrics alert-test
 
@@ -21,10 +23,10 @@ ps:
 	$(COMPOSE) ps
 
 health:
-	bash scripts/health-check.sh
+	AGSGPT_PORT=$(AGSGPT_PORT) bash scripts/health-check.sh
 
 metrics:
-	@curl -s http://127.0.0.1:8000/metrics | grep "^agent_"
+	@curl -s http://127.0.0.1:$(AGSGPT_PORT)/metrics | grep "^agent_"
 
 alert-test:
 	@curl -s -X POST http://localhost:9093/api/v2/alerts \
