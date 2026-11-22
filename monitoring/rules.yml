@@ -1,0 +1,47 @@
+groups:
+  - name: agsgpt-alerts
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: agent_circuit_state == 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit {{ $labels.provider }} OPEN"
+          description: "Proveedor {{ $labels.provider }} caído >30s"
+
+      - alert: CircuitBreakerFlapping
+        expr: rate(agent_circuit_state_changes_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit {{ $labels.provider }} flapping"
+          description: "Más de 15 transiciones en 5 min"
+
+      - alert: HighFallbackRate
+        expr: rate(agent_fallback_used_total[5m]) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fallback rate alto"
+          description: "Más de 1 fallback/s durante 2 min"
+
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, rate(agent_llm_call_duration_seconds_bucket[5m])) > 10
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 > 10s"
+          description: "Latencia P95 de LLM > 10s"
+
+      - alert: ServiceDown
+        expr: up{job="agsgpt"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "agsgpt DOWN"
+          description: "Servidor {{ $labels.instance }} no responde"
