@@ -10,7 +10,7 @@ Servicio FastAPI con una cadena de fallback entre modelos de lenguaje (OpenAI, A
 | Ruta | Contenido |
 |---|---|
 | `app/` | API (`main.py`), agente, cadena de fallback y circuit breaker (`fallback.py`), métricas y clientes LLM |
-| `tests/` | Tests de la cadena de fallback (`pytest`) |
+| `tests/` | Tests de fallback, API, circuito compartido entre workers, health-check y configuración (`pytest`) |
 | `monitoring/` | Prometheus, reglas de alerta y Alertmanager |
 | `docker/` | `Dockerfile` y `docker-compose.yml` |
 | `systemd/` | Unidad `agsgpt.service` |
@@ -22,11 +22,11 @@ Servicio FastAPI con una cadena de fallback entre modelos de lenguaje (OpenAI, A
 pip install -r requirements-dev.txt
 cp .env.example .env            # rellena las claves y GRAFANA_PASSWORD
 bash scripts/set-smtp-password.sh
-make test                        # 12 tests
-make up && make ps && make health
+make test                        # 27 tests
+make up && make ps && make health   # make up genera antes alertmanager.rendered.yml
 ```
 
-Variables opcionales en `.env`: `AGSGPT_PORT` (puerto publicado de la app; `make health` y `make metrics` lo usan, por defecto 8000), `AGSGPT_HEALTH_URL`, `AGSGPT_ALERT_EMAIL` y `AGSGPT_SMTP_PASS_FILE` (por defecto `monitoring/secrets/smtp_password` del repo). `make up` lee el `.env` de la raíz con `--env-file`.
+Variable obligatoria para avisos: `AGSGPT_ALERT_EMAIL` (Alertmanager y health-check; `.env.example` solo trae un ejemplo). Variables opcionales en `.env`: `AGSGPT_CIRCUIT_DB` (estado del circuit breaker compartido entre workers, SQLite), `AGSGPT_ALERT_REPEAT_SECONDS` (deduplicación de avisos, 3600 s por defecto), `AGSGPT_PORT` (puerto publicado de la app; `make health` y `make metrics` lo usan, por defecto 8000), `AGSGPT_HEALTH_URL` y `AGSGPT_SMTP_PASS_FILE` (por defecto `monitoring/secrets/smtp_password` del repo). `make up` lee el `.env` de la raíz con `--env-file`.
 
 `.env` y `monitoring/secrets/` están excluidos de git. Detalle de cambios y pendientes: `REVISION_OPCION_D.md`.
 
@@ -35,3 +35,11 @@ Variables opcionales en `.env`: `AGSGPT_PORT` (puerto publicado de la app; `make
 - 12 tests pasan con las dependencias reales (`pytest`, `prometheus-client`, `fastapi`).
 - `make up` probado con Docker 26.1.5 y Compose 2.26.1: los 4 servicios arrancan, la app queda `healthy` y Prometheus ve los targets.
 - Pendiente: llamadas reales a OpenAI o Anthropic; imágenes de monitorización en `latest` sin fijar.
+
+## Cambios del 2026-11-25 (aprobados por Lázaro: «Realizar A,B,C,D»)
+
+- `fallback.py`: `messages` vacío → `ValueError` (HTTP 422 en `/chat`); `KeyError`/`ValueError` y errores de clave son permanentes (sin reintentos); estado del circuit breaker en `SQLiteBackend` compartido entre workers (transacciones `BEGIN IMMEDIATE`, solo stdlib).
+- `docker-compose.yml`: puertos solo en `127.0.0.1`; imágenes `prom/prometheus:v3.16.0`, `prom/alertmanager:v0.35.1`, `grafana/grafana:13.3.2` (tags comprobados en Docker Hub, sin arrancar: Docker no disponible en el equipo de prueba).
+- `alertmanager.yml` es plantilla; `scripts/render-alertmanager.py` genera `alertmanager.rendered.yml` (ignorado por git) con `AGSGPT_ALERT_EMAIL`.
+- `health-check.sh`: deduplicación (aviso al fallar, repetición cada `AGSGPT_ALERT_REPEAT_SECONDS`, aviso de recuperación) y correo desde `.env`.
+- Pendiente: `docker compose config` y `make up` con las imágenes fijadas.

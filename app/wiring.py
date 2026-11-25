@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 from .agent import Agent
-from .fallback import FallbackChain, ModelConfig, CircuitBreaker
+import os
+
+from .fallback import FallbackChain, ModelConfig, CircuitBreaker, SQLiteBackend
 from .llm.clients import call_gpt4o, call_gpt4o_mini, call_claude_sonnet
 
-_openai_breaker = CircuitBreaker(provider="openai", fail_max=5, reset_timeout=30)
-_anthropic_breaker = CircuitBreaker(provider="anthropic", fail_max=5, reset_timeout=30)
+# Estado compartido entre workers de gunicorn (un fichero SQLite por contenedor/host).
+_backend = SQLiteBackend(os.getenv("AGSGPT_CIRCUIT_DB", "/tmp/agsgpt_circuit.sqlite3"))
+_openai_breaker = CircuitBreaker(provider="openai", fail_max=5, reset_timeout=30, backend=_backend)
+_anthropic_breaker = CircuitBreaker(provider="anthropic", fail_max=5, reset_timeout=30, backend=_backend)
 
 _chain = FallbackChain(
     models=[

@@ -1,12 +1,21 @@
-"""Fallback chain con circuit breaker (closed / open / half-open)."""
+"""Fallback chain con circuit breaker (closed / open / half-open).
+
+El estado del breaker vive en un backend: en memoria (un proceso) o en SQLite
+(compartido entre workers de gunicorn, sin dependencias externas). Cada cambio
+se hace en una transacción BEGIN IMMEDIATE, así que no se pierden fallos.
+"""
 from __future__ import annotations
 
+import json
 import logging
 import random
+import sqlite3
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .metrics import CIRCUIT_STATE, CIRCUIT_STATE_CHANGES, RETRY_TOTAL, LLM_CALL_DURATION
 
@@ -35,65 +44,135 @@ class ModelConfig:
     timeout: float = 30.0
 
 
+def _default_state() -> dict:
+    return {"state": "closed", "opened_at": 0.0, "successes": 0, "failures": []}
+
+
+class MemoryBackend:
+    """Estado en memoria: válido para un solo proceso (tests, uvicorn sin workers)."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, dict] = {}
+        self._lock = threading.RLock()
+
+    @contextmanager
+    def transaction(self, provider: str) -> Iterator[dict]:
+        with self._lock:
+            st = json.loads(json.dumps(self._data.get(provider, _default_state())))
+            yield st
+            self._data[provider] = st
+
+
+class SQLiteBackend:
+    """Estado compartido entre procesos en un fichero SQLite (stdlib)."""
+
+    def __init__(self, path: str, timeout: float = 10.0) -> None:
+        self.path = path
+        self.timeout = timeout
+        with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("CREATE TABLE IF NOT EXISTS circuit (provider TEXT PRIMARY KEY, data TEXT NOT NULL)")
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self.path, timeout=self.timeout, isolation_level=None)
+
+    @contextmanager
+    def transaction(self, provider: str) -> Iterator[dict]:
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT data FROM circuit WHERE provider = ?", (provider,)).fetchone()
+            st = json.loads(row[0]) if row else _default_state()
+            yield st
+            conn.execute(
+                "INSERT INTO circuit (provider, data) VALUES (?, ?) "
+                "ON CONFLICT(provider) DO UPDATE SET data = excluded.data",
+                (provider, json.dumps(st)),
+            )
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+
+
 class CircuitBreaker:
     def __init__(self, provider: str, fail_max: int = 5,
-                 reset_timeout: float = 30.0, success_threshold: int = 3):
+                 reset_timeout: float = 30.0, success_threshold: int = 3,
+                 backend: MemoryBackend | SQLiteBackend | None = None,
+                 failure_window: float = 30.0):
         self.provider = provider
         self.fail_max = fail_max
         self.reset_timeout = reset_timeout
         self.success_threshold = success_threshold
-        self._failures: list[float] = []
-        self._successes: int = 0
-        self._state = CircuitState.CLOSED
-        self._opened_at: float | None = None
-        CIRCUIT_STATE.labels(provider=provider).set(0)
+        self.failure_window = failure_window
+        self.backend = backend or MemoryBackend()
+        with self.backend.transaction(provider) as st:
+            current = st["state"]
+        CIRCUIT_STATE.labels(provider=provider).set({"closed": 0, "open": 1, "half-open": 2}[current])
+
+    def _maybe_half_open(self, st: dict, events: list) -> None:
+        if st["state"] == CircuitState.OPEN.value and time.time() - st["opened_at"] >= self.reset_timeout:
+            self._set(st, CircuitState.HALF_OPEN, events)
+
+    def _set(self, st: dict, new: CircuitState, events: list) -> None:
+        old = st["state"]
+        st["state"] = new.value
+        if new == CircuitState.OPEN:
+            st["opened_at"] = time.time()
+            st["successes"] = 0
+        elif new == CircuitState.CLOSED:
+            st["failures"] = []
+            st["successes"] = 0
+        events.append((old, new.value))
+
+    def _emit(self, events: list) -> None:
+        for old, new in events:
+            CIRCUIT_STATE.labels(provider=self.provider).set({"closed": 0, "open": 1, "half-open": 2}[new])
+            CIRCUIT_STATE_CHANGES.labels(provider=self.provider, from_state=old, to_state=new).inc()
+            log_fn = logger.critical if new == CircuitState.OPEN.value else logger.info
+            log_fn("Circuit [%s] %s → %s", self.provider, old, new)
 
     @property
     def state(self) -> CircuitState:
-        if self._state == CircuitState.OPEN:
-            if time.time() - (self._opened_at or 0) >= self.reset_timeout:
-                self._transition(CircuitState.HALF_OPEN)
-        return self._state
+        events: list = []
+        with self.backend.transaction(self.provider) as st:
+            self._maybe_half_open(st, events)
+            current = st["state"]
+        self._emit(events)
+        return CircuitState(current)
+
+    def failure_count(self) -> int:
+        with self.backend.transaction(self.provider) as st:
+            return len(st["failures"])
 
     def allow_request(self) -> bool:
         return self.state != CircuitState.OPEN
 
     def record_success(self):
-        prev = self.state
-        if prev == CircuitState.HALF_OPEN:
-            self._successes += 1
-            if self._successes >= self.success_threshold:
-                self._transition(CircuitState.CLOSED)
-        elif prev == CircuitState.CLOSED:
-            self._successes = 0
+        events: list = []
+        with self.backend.transaction(self.provider) as st:
+            self._maybe_half_open(st, events)
+            if st["state"] == CircuitState.HALF_OPEN.value:
+                st["successes"] += 1
+                if st["successes"] >= self.success_threshold:
+                    self._set(st, CircuitState.CLOSED, events)
+            elif st["state"] == CircuitState.CLOSED.value:
+                st["successes"] = 0
+        self._emit(events)
 
     def record_failure(self):
-        prev = self.state
-        now = time.time()
-        self._failures = [t for t in self._failures if now - t < 30]
-        self._failures.append(now)
-        if prev == CircuitState.HALF_OPEN:
-            self._transition(CircuitState.OPEN)
-        elif len(self._failures) >= self.fail_max:
-            self._transition(CircuitState.OPEN)
-
-    def _transition(self, new: CircuitState):
-        old = self._state
-        self._state = new
-        if new == CircuitState.OPEN:
-            self._opened_at = time.time()
-            self._successes = 0
-        elif new == CircuitState.CLOSED:
-            self._failures.clear()
-            self._successes = 0
-        CIRCUIT_STATE.labels(provider=self.provider).set(
-            {"closed": 0, "open": 1, "half-open": 2}[new.value]
-        )
-        CIRCUIT_STATE_CHANGES.labels(
-            provider=self.provider, from_state=old.value, to_state=new.value
-        ).inc()
-        log_fn = logger.critical if new == CircuitState.OPEN else logger.info
-        log_fn("Circuit [%s] %s → %s", self.provider, old.value, new.value)
+        events: list = []
+        with self.backend.transaction(self.provider) as st:
+            self._maybe_half_open(st, events)
+            now = time.time()
+            st["failures"] = [t for t in st["failures"] if now - t < self.failure_window] + [now]
+            if st["state"] == CircuitState.HALF_OPEN.value:
+                self._set(st, CircuitState.OPEN, events)
+            elif st["state"] == CircuitState.CLOSED.value and len(st["failures"]) >= self.fail_max:
+                self._set(st, CircuitState.OPEN, events)
+        self._emit(events)
 
 
 class FallbackChain:
@@ -102,6 +181,8 @@ class FallbackChain:
         self.breakers = breakers
 
     def call(self, messages: list[dict], **kwargs) -> dict[str, Any]:
+        if not messages:
+            raise ValueError("messages no puede estar vacío")
         last_error: Exception | None = None
 
         for model in self.models:
@@ -163,11 +244,15 @@ class FallbackChain:
 
     @staticmethod
     def _classify(e: Exception) -> ErrorType:
+        if isinstance(e, (KeyError, ValueError)):
+            return ErrorType.PERMANENT  # p. ej. falta OPENAI_API_KEY: reintentar no sirve
         status = getattr(e, "status_code", None) or getattr(e, "status", None)
         msg = str(e).lower()
         if status in (401, 402, 403):
             return ErrorType.PERMANENT
         if status == 429 and any(w in msg for w in ("quota", "spend", "billing")):
+            return ErrorType.PERMANENT
+        if any(w in msg for w in ("authentication", "invalid_api_key", "api_key")):
             return ErrorType.PERMANENT
         if status in (408, 429, 500, 502, 503, 529):
             return ErrorType.TRANSIENT

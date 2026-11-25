@@ -1,9 +1,11 @@
+# Plantilla: el correo sale de AGSGPT_ALERT_EMAIL en .env.
+# Generar: python3 scripts/render-alertmanager.py  →  monitoring/alertmanager.rendered.yml (ignorado por git)
 global:
   resolve_timeout: 5m
   smtp_smarthost: "smtp.gmail.com:587"
-  smtp_from: "canelone.mf@gmail.com"
-  smtp_auth_username: "canelone.mf@gmail.com"
-  smtp_auth_identity: "canelone.mf@gmail.com"
+  smtp_from: "${AGSGPT_ALERT_EMAIL}"
+  smtp_auth_username: "${AGSGPT_ALERT_EMAIL}"
+  smtp_auth_identity: "${AGSGPT_ALERT_EMAIL}"
   smtp_auth_password_file: /etc/alertmanager/secrets/smtp_password
   smtp_require_tls: true
 
@@ -22,14 +24,14 @@ route:
 receivers:
   - name: email-default
     email_configs:
-      - to: "canelone.mf@gmail.com"
+      - to: "${AGSGPT_ALERT_EMAIL}"
         send_resolved: true
         headers:
           Subject: "[{{ .Status | toUpper }}] agsgpt · {{ .CommonLabels.alertname }}"
 
   - name: email-critical
     email_configs:
-      - to: "canelone.mf@gmail.com"
+      - to: "${AGSGPT_ALERT_EMAIL}"
         send_resolved: true
         headers:
           Subject: "CRITICAL · agsgpt · {{ .CommonLabels.alertname }}"

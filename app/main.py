@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from .wiring import get_agent
@@ -20,7 +20,7 @@ Instrumentator(
 
 
 class ChatRequest(BaseModel):
-    messages: list[dict]
+    messages: list[dict] = Field(..., min_length=1)
     agent: str = "default"
 
 
@@ -40,6 +40,8 @@ def health():
 def chat(req: ChatRequest):
     try:
         result = get_agent(req.agent).run(req.messages)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     return ChatResponse(**result)

@@ -3,3 +3,8 @@ monitoring/secrets/
 __pycache__/
 *.pyc
 .pytest_cache/
+.env.*
+!.env.example
+*.bak_*
+monitoring/alertmanager.rendered.yml
+.state/

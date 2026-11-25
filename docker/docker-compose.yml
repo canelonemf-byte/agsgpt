@@ -1,10 +1,12 @@
+# Puertos solo en 127.0.0.1. Imágenes fijadas (tags comprobados en Docker Hub el 2026-11-25).
+# alertmanager.rendered.yml se genera con: python3 scripts/render-alertmanager.py
 services:
   app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "${AGSGPT_PORT:-8000}:8000"
+      - "127.0.0.1:${AGSGPT_PORT:-8000}:8000"
     env_file:
       - ../.env
     environment:
@@ -14,7 +16,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.16.0
     volumes:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../monitoring/rules.yml:/etc/prometheus/rules.yml:ro
@@ -24,22 +26,22 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     restart: unless-stopped
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.35.1
     volumes:
-      - ../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ../monitoring/alertmanager.rendered.yml:/etc/alertmanager/alertmanager.yml:ro
       - ../monitoring/secrets/smtp_password:/etc/alertmanager/secrets/smtp_password:ro
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.3.2
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?Define GRAFANA_PASSWORD en .env}
     volumes:
