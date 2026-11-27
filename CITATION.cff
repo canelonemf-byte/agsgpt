@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "Si utiliza este trabajo, cítalo según este archivo. Elaborado por Lázaro López Paz, El Prat de Llobregat, Barcelona, España, con asistencia de inteligencia artificial. Sin afiliaciones institucionales."
+title: "agsgpt · Opción D"
+date-released: "2026-11-27"
+type: software
+license: "MIT"
+repository-code: "https://github.com/canelonemf-byte/agsgpt"
+authors:
+  - family-names: "López Paz"
+    given-names: "Lázaro"
+    orcid: "https://orcid.org/0000-0001-8601-1963"
+abstract: >-
+  Trabajo de Lázaro López Paz, El Prat de Llobregat, Barcelona, España, con asistencia de inteligencia artificial. ORCID: https://orcid.org/0000-0001-8601-1963. Sin afiliaciones institucionales.
